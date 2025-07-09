@@ -51,7 +51,18 @@ class ChatViewModel: ObservableObject {
     @Published var savedChannels: Set<String> = []  // Channels saved for message retention
     @Published var retentionEnabledChannels: Set<String> = []  // Channels where owner enabled retention for all members
     
+    // WiFi Bridge support
+    @Published var isBridgeEnabled = false
+    @Published var bridgeStatus: String = "Disconnected"
+    @Published var activeTransports: Set<String> = []
+    @Published var primaryTransport: String = "Bluetooth"
+    
     let meshService = BluetoothMeshService()
+    private let encryptionService = EncryptionService()
+    private lazy var hybridTransportManager = HybridTransportManager(
+        bluetoothService: meshService,
+        encryptionService: encryptionService
+    )
     private let userDefaults = UserDefaults.standard
     private let nicknameKey = "bitchat.nickname"
     private let favoritesKey = "bitchat.favorites"
@@ -93,6 +104,9 @@ class ChatViewModel: ObservableObject {
         
         // Request notification permission
         NotificationService.shared.requestAuthorization()
+        
+        // Initialize hybrid transport manager
+        setupHybridTransport()
         
         // Subscribe to delivery status updates
         deliveryTrackerCancellable = DeliveryTracker.shared.deliveryStatusUpdated
@@ -2456,6 +2470,73 @@ extension ChatViewModel: BitchatDelegate {
                 messages.append(systemMessage)
             }
             
+        case "/bridge":
+            if parts.count > 1 {
+                let action = String(parts[1]).lowercased()
+                switch action {
+                case "on", "enable", "start":
+                    enableBridge(true)
+                    let systemMessage = BitchatMessage(
+                        sender: "system",
+                        content: "WiFi bridge enabled. connecting to relay servers...",
+                        timestamp: Date(),
+                        isRelay: false
+                    )
+                    messages.append(systemMessage)
+                    
+                case "off", "disable", "stop":
+                    enableBridge(false)
+                    let systemMessage = BitchatMessage(
+                        sender: "system",
+                        content: "WiFi bridge disabled.",
+                        timestamp: Date(),
+                        isRelay: false
+                    )
+                    messages.append(systemMessage)
+                    
+                case "status", "info":
+                    let status = isBridgeEnabled ? "enabled" : "disabled"
+                    let transportInfo = getRecommendedTransport()
+                    let stats = getBridgeStatistics()
+                    
+                    var statusText = "WiFi bridge: \(status)"
+                    if isBridgeEnabled {
+                        statusText += "\nPrimary transport: \(transportInfo)"
+                        statusText += "\nActive transports: \(Array(activeTransports).joined(separator: ", "))"
+                        if let latency = stats["WiFi Bridge"]?["latency"] as? String {
+                            statusText += "\nBridge latency: \(latency)"
+                        }
+                    }
+                    
+                    let systemMessage = BitchatMessage(
+                        sender: "system",
+                        content: statusText,
+                        timestamp: Date(),
+                        isRelay: false
+                    )
+                    messages.append(systemMessage)
+                    
+                default:
+                    let systemMessage = BitchatMessage(
+                        sender: "system",
+                        content: "usage: /bridge <on|off|status>",
+                        timestamp: Date(),
+                        isRelay: false
+                    )
+                    messages.append(systemMessage)
+                }
+            } else {
+                // No argument provided, show current status
+                let status = isBridgeEnabled ? "enabled" : "disabled"
+                let systemMessage = BitchatMessage(
+                    sender: "system",
+                    content: "WiFi bridge is currently \(status). use '/bridge on' or '/bridge off' to change.",
+                    timestamp: Date(),
+                    isRelay: false
+                )
+                messages.append(systemMessage)
+            }
+            
         default:
             // Unknown command
             let systemMessage = BitchatMessage(
@@ -3132,5 +3213,67 @@ extension ChatViewModel: BitchatDelegate {
             }
         }
     }
+    
+    // MARK: - WiFi Bridge Support
+    
+    private func setupHybridTransport() {
+        // Load bridge preference
+        isBridgeEnabled = userDefaults.bool(forKey: "bitchat.bridgeEnabled")
+        
+        // Subscribe to transport manager updates
+        hybridTransportManager.$activeTransports
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] transports in
+                self?.activeTransports = Set(transports.map { $0.displayName })
+            }
+            .store(in: &cancellables)
+        
+        hybridTransportManager.$primaryTransport
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] transport in
+                self?.primaryTransport = transport.displayName
+            }
+            .store(in: &cancellables)
+        
+        // Monitor bridge connection status
+        meshService.$bridgeConnected
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] connected in
+                self?.bridgeStatus = connected ? "Connected" : "Disconnected"
+            }
+            .store(in: &cancellables)
+        
+        // Enable bridge if previously enabled
+        if isBridgeEnabled {
+            enableBridge(true)
+        }
+    }
+    
+    func enableBridge(_ enabled: Bool) {
+        isBridgeEnabled = enabled
+        userDefaults.set(enabled, forKey: "bitchat.bridgeEnabled")
+        
+        hybridTransportManager.enableHybridMode(enabled)
+        
+        bridgeStatus = enabled ? "Connecting..." : "Disabled"
+    }
+    
+    func getBridgeStatistics() -> [String: Any] {
+        return hybridTransportManager.getTransportStatistics().mapValues { stats in
+            return stats.mapValues { value in
+                if let timeInterval = value as? TimeInterval {
+                    return String(format: "%.0fms", timeInterval * 1000)
+                }
+                return value
+            }
+        }
+    }
+    
+    func getRecommendedTransport() -> String {
+        return hybridTransportManager.getRecommendedTransport().displayName
+    }
+    
+    // Add cancellables property if not already present
+    private var cancellables = Set<AnyCancellable>()
     
 }

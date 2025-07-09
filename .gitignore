@@ -59,3 +59,12 @@ __pycache__/
 ## Temporary files
 *.tmp
 *.temp
+
+
+## env
+.env
+
+## node
+node_modules
+
+dist

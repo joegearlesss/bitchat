@@ -1,0 +1,18 @@
+{
+  "timestamp": "2025-07-09T22:55:24.287Z",
+  "environment": "staging",
+  "success": false,
+  "duration": 7999,
+  "scriptName": "bitchat-bridge-staging",
+  "scriptSize": 0,
+  "durableObjects": [
+    {
+      "name": "BRIDGE_RELAY",
+      "className": "BridgeRelay"
+    }
+  ],
+  "routes": [],
+  "errors": [
+    "Worker upload failed (400): Uncaught SyntaxError: Unexpected token 'export'\n  at index.js:1:4663\n"
+  ]
+}
