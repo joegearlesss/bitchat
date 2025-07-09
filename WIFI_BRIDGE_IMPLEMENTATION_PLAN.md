@@ -673,24 +673,1399 @@ class BridgeRelay {
 ```
 
 ### Bridge Deployment Configuration
-```yaml
-# wrangler.toml for Cloudflare deployment
-name = "bitchat-bridge"
-main = "bridge-worker.js"
-compatibility_date = "2024-01-01"
 
-[durable_objects]
-bindings = [
-  { name = "BRIDGE_RELAY", class_name = "BridgeRelay" }
-]
-
-[[durable_objects.migrations]]
-tag = "v1"
-new_classes = ["BridgeRelay"]
-
-[env.production]
-route = "bridge.bitchat.app/*"
+#### Project Structure
 ```
+bridge-server/
+├── src/
+│   ├── index.ts          # Main worker entry point
+│   ├── bridge-relay.ts   # Durable Object implementation
+│   └── types.ts          # TypeScript type definitions
+├── deploy/
+│   ├── deploy.ts         # Main deployment script
+│   ├── config.ts         # Deployment configuration
+│   ├── cloudflare-api.ts # Cloudflare API helpers
+│   └── utils.ts          # Deployment utilities
+├── scripts/
+│   ├── build.ts          # Build script
+│   ├── clean.ts          # Cleanup script
+│   └── test-deployment.ts # Deployment testing
+├── package.json          # Zero dependencies
+├── tsconfig.json         # TypeScript configuration
+├── .env.example          # Environment variables template
+└── bun.lockb             # Bun lock file
+```
+
+#### package.json (Zero Dependencies)
+```json
+{
+  "name": "bitchat-bridge",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "bun run scripts/build.ts",
+    "deploy": "bun run deploy/deploy.ts",
+    "deploy:staging": "bun run deploy/deploy.ts --env=staging",
+    "deploy:production": "bun run deploy/deploy.ts --env=production",
+    "cleanup": "bun run scripts/clean.ts",
+    "test-deploy": "bun run scripts/test-deployment.ts",
+    "dev": "bun run --watch src/index.ts"
+  },
+  "devDependencies": {
+    "bun-types": "latest"
+  }
+}
+```
+
+#### tsconfig.json
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "allowJs": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["bun-types"],
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["src/**/*", "deploy/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+```
+
+#### deploy/config.ts - Deployment Configuration
+```typescript
+export interface DeploymentConfig {
+  scriptName: string;
+  compatibilityDate: string;
+  compatibilityFlags: string[];
+  durableObjects: DurableObjectConfig[];
+  routes: RouteConfig[];
+}
+
+export interface DurableObjectConfig {
+  name: string;
+  className: string;
+  scriptName?: string;
+}
+
+export interface RouteConfig {
+  pattern: string;
+  zone: string;
+}
+
+export const deploymentConfigs: Record<string, DeploymentConfig> = {
+  staging: {
+    scriptName: "bitchat-bridge-staging",
+    compatibilityDate: "2024-01-01",
+    compatibilityFlags: ["nodejs_compat"],
+    durableObjects: [
+      {
+        name: "BRIDGE_RELAY",
+        className: "BridgeRelay"
+      }
+    ],
+    routes: [
+      {
+        pattern: "bridge-staging.bitchat.app/*",
+        zone: process.env.CLOUDFLARE_ZONE_ID_STAGING!
+      }
+    ]
+  },
+  
+  production: {
+    scriptName: "bitchat-bridge",
+    compatibilityDate: "2024-01-01",
+    compatibilityFlags: ["nodejs_compat"],
+    durableObjects: [
+      {
+        name: "BRIDGE_RELAY",
+        className: "BridgeRelay"
+      }
+    ],
+    routes: [
+      {
+        pattern: "bridge.bitchat.app/*",
+        zone: process.env.CLOUDFLARE_ZONE_ID!
+      }
+    ]
+  }
+};
+
+export const getConfig = (env: string = 'staging'): DeploymentConfig => {
+  const config = deploymentConfigs[env];
+  if (!config) {
+    throw new Error(`Unknown environment: ${env}`);
+  }
+  return config;
+};
+```
+
+#### deploy/cloudflare-api.ts - Native Cloudflare API Client
+```typescript
+export interface CloudflareResponse<T = any> {
+  success: boolean;
+  errors: Array<{ code: number; message: string }>;
+  messages: Array<{ code: number; message: string }>;
+  result: T;
+}
+
+export interface WorkerScript {
+  id: string;
+  etag: string;
+  size: number;
+  modified_on: string;
+}
+
+export interface DurableObjectNamespace {
+  id: string;
+  name: string;
+  script: string;
+  class: string;
+}
+
+export interface WorkerRoute {
+  id: string;
+  pattern: string;
+  script?: string;
+  zone_id: string;
+  zone_name: string;
+}
+
+export class CloudflareAPI {
+  private apiToken: string;
+  private accountId: string;
+  private baseURL = 'https://api.cloudflare.com/client/v4';
+
+  constructor(apiToken: string, accountId: string) {
+    this.apiToken = apiToken;
+    this.accountId = accountId;
+  }
+
+  private async request<T = any>(
+    endpoint: string, 
+    options: RequestInit = {}
+  ): Promise<CloudflareResponse<T>> {
+    const url = `${this.baseURL}${endpoint}`;
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Authorization': `Bearer ${this.apiToken}`,
+        'Content-Type': 'application/json',
+        ...options.headers
+      }
+    });
+
+    const data = await response.json() as CloudflareResponse<T>;
+
+    if (!response.ok || !data.success) {
+      const errorMessage = data.errors?.map(e => e.message).join(', ') || 'Unknown error';
+      throw new Error(`Cloudflare API error (${response.status}): ${errorMessage}`);
+    }
+
+    return data;
+  }
+
+  async uploadWorkerScript(
+    scriptName: string, 
+    scriptContent: string, 
+    metadata: WorkerMetadata
+  ): Promise<WorkerScript> {
+    const formData = new FormData();
+    formData.append('script', new Blob([scriptContent], { type: 'application/javascript' }));
+    formData.append('metadata', JSON.stringify(metadata));
+
+    const response = await fetch(
+      `${this.baseURL}/accounts/${this.accountId}/workers/scripts/${scriptName}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${this.apiToken}`
+        },
+        body: formData
+      }
+    );
+
+    const data = await response.json() as CloudflareResponse<WorkerScript>;
+
+    if (!response.ok || !data.success) {
+      const errorMessage = data.errors?.map(e => e.message).join(', ') || 'Upload failed';
+      throw new Error(`Worker upload failed (${response.status}): ${errorMessage}`);
+    }
+
+    return data.result;
+  }
+
+  async createDurableObjectNamespace(
+    name: string, 
+    className: string, 
+    scriptName: string
+  ): Promise<DurableObjectNamespace> {
+    const response = await this.request<DurableObjectNamespace>(
+      `/accounts/${this.accountId}/workers/durable_objects/namespaces`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          class: className,
+          script: scriptName
+        })
+      }
+    );
+    return response.result;
+  }
+
+  async updateDurableObjectNamespace(
+    namespaceId: string, 
+    className: string, 
+    scriptName: string
+  ): Promise<DurableObjectNamespace> {
+    const response = await this.request<DurableObjectNamespace>(
+      `/accounts/${this.accountId}/workers/durable_objects/namespaces/${namespaceId}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({
+          class: className,
+          script: scriptName
+        })
+      }
+    );
+    return response.result;
+  }
+
+  async listDurableObjectNamespaces(): Promise<DurableObjectNamespace[]> {
+    const response = await this.request<DurableObjectNamespace[]>(
+      `/accounts/${this.accountId}/workers/durable_objects/namespaces`
+    );
+    return response.result;
+  }
+
+  async getDurableObjectNamespace(namespaceId: string): Promise<DurableObjectNamespace> {
+    const response = await this.request<DurableObjectNamespace>(
+      `/accounts/${this.accountId}/workers/durable_objects/namespaces/${namespaceId}`
+    );
+    return response.result;
+  }
+
+  async deleteDurableObjectNamespace(namespaceId: string): Promise<void> {
+    await this.request(
+      `/accounts/${this.accountId}/workers/durable_objects/namespaces/${namespaceId}`,
+      { method: 'DELETE' }
+    );
+  }
+
+  async createRoute(zoneId: string, pattern: string, scriptName: string): Promise<WorkerRoute> {
+    const response = await this.request<WorkerRoute>(
+      `/zones/${zoneId}/workers/routes`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          pattern,
+          script: scriptName
+        })
+      }
+    );
+    return response.result;
+  }
+
+  async listRoutes(zoneId: string): Promise<WorkerRoute[]> {
+    const response = await this.request<WorkerRoute[]>(`/zones/${zoneId}/workers/routes`);
+    return response.result;
+  }
+
+  async updateRoute(zoneId: string, routeId: string, scriptName: string): Promise<WorkerRoute> {
+    const response = await this.request<WorkerRoute>(
+      `/zones/${zoneId}/workers/routes/${routeId}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({
+          script: scriptName
+        })
+      }
+    );
+    return response.result;
+  }
+
+  async deleteRoute(zoneId: string, routeId: string): Promise<void> {
+    await this.request(`/zones/${zoneId}/workers/routes/${routeId}`, {
+      method: 'DELETE'
+    });
+  }
+
+  async getWorkerScript(scriptName: string): Promise<WorkerScript> {
+    const response = await this.request<WorkerScript>(
+      `/accounts/${this.accountId}/workers/scripts/${scriptName}`
+    );
+    return response.result;
+  }
+
+  async deleteWorkerScript(scriptName: string): Promise<void> {
+    await this.request(`/accounts/${this.accountId}/workers/scripts/${scriptName}`, {
+      method: 'DELETE'
+    });
+  }
+
+  async listWorkerScripts(): Promise<WorkerScript[]> {
+    const response = await this.request<WorkerScript[]>(
+      `/accounts/${this.accountId}/workers/scripts`
+    );
+    return response.result;
+  }
+
+  async validateCredentials(): Promise<boolean> {
+    try {
+      await this.request('/user/tokens/verify');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+export interface WorkerMetadata {
+  main_module: string;
+  compatibility_date: string;
+  compatibility_flags: string[];
+  bindings: WorkerBinding[];
+}
+
+export interface WorkerBinding {
+  name: string;
+  type: string;
+  class_name?: string;
+  script_name?: string;
+}
+```
+
+#### deploy/utils.ts - Deployment Utilities
+```typescript
+import { createWriteStream, existsSync, mkdirSync } from 'fs';
+import { join } from 'path';
+
+export const colors = {
+  reset: '\x1b[0m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  magenta: '\x1b[35m',
+  cyan: '\x1b[36m',
+  white: '\x1b[37m',
+  gray: '\x1b[90m'
+} as const;
+
+export const log = {
+  info: (msg: string) => console.log(`${colors.blue}ℹ${colors.reset} ${msg}`),
+  success: (msg: string) => console.log(`${colors.green}✅${colors.reset} ${msg}`),
+  warning: (msg: string) => console.log(`${colors.yellow}⚠${colors.reset} ${msg}`),
+  error: (msg: string) => console.log(`${colors.red}❌${colors.reset} ${msg}`),
+  step: (msg: string) => console.log(`${colors.cyan}🔧${colors.reset} ${msg}`),
+  debug: (msg: string) => console.log(`${colors.gray}🐛${colors.reset} ${msg}`)
+} as const;
+
+export function ensureDir(dirPath: string): void {
+  if (!existsSync(dirPath)) {
+    mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+export function validateEnvironmentVariables(): {
+  apiToken: string;
+  accountId: string;
+} {
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  
+  if (!apiToken) {
+    throw new Error('Missing required environment variable: CLOUDFLARE_API_TOKEN');
+  }
+  
+  if (!accountId) {
+    throw new Error('Missing required environment variable: CLOUDFLARE_ACCOUNT_ID');
+  }
+  
+  return { apiToken, accountId };
+}
+
+export function parseArguments(args: string[]): {
+  environment: string;
+  isCleanup: boolean;
+  isDryRun: boolean;
+  verbose: boolean;
+} {
+  const envFlag = args.find(arg => arg.startsWith('--env='));
+  const environment = envFlag ? envFlag.split('=')[1] : 'staging';
+  const isCleanup = args.includes('--cleanup');
+  const isDryRun = args.includes('--dry-run');
+  const verbose = args.includes('--verbose') || args.includes('-v');
+  
+  return { environment, isCleanup, isDryRun, verbose };
+}
+
+export async function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export async function retry<T>(
+  fn: () => Promise<T>,
+  maxAttempts: number = 3,
+  delayMs: number = 1000
+): Promise<T> {
+  let lastError: Error;
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error as Error;
+      
+      if (attempt === maxAttempts) {
+        break;
+      }
+      
+      log.warning(`Attempt ${attempt} failed, retrying in ${delayMs}ms...`);
+      await sleep(delayMs);
+      delayMs *= 2; // Exponential backoff
+    }
+  }
+  
+  throw lastError!;
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+}
+
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60000).toFixed(1)}m`;
+}
+
+export class ProgressSpinner {
+  private spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  private current = 0;
+  private interval?: Timer;
+  private message: string;
+
+  constructor(message: string) {
+    this.message = message;
+  }
+
+  start(): void {
+    process.stdout.write(`${this.spinner[0]} ${this.message}`);
+    this.interval = setInterval(() => {
+      this.current = (this.current + 1) % this.spinner.length;
+      process.stdout.write(`\r${this.spinner[this.current]} ${this.message}`);
+    }, 100);
+  }
+
+  stop(finalMessage?: string): void {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = undefined;
+    }
+    process.stdout.write(`\r${finalMessage || this.message}\n`);
+  }
+}
+
+export async function writeDeploymentReport(
+  environment: string,
+  deploymentData: any
+): Promise<void> {
+  const reportsDir = 'deploy/reports';
+  ensureDir(reportsDir);
+  
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const reportFile = join(reportsDir, `deployment-${environment}-${timestamp}.json`);
+  
+  const report = {
+    timestamp: new Date().toISOString(),
+    environment,
+    success: deploymentData.success,
+    duration: deploymentData.duration,
+    scriptName: deploymentData.scriptName,
+    scriptSize: deploymentData.scriptSize,
+    durableObjects: deploymentData.durableObjects,
+    routes: deploymentData.routes,
+    errors: deploymentData.errors || []
+  };
+  
+  await Bun.write(reportFile, JSON.stringify(report, null, 2));
+  log.info(`Deployment report saved: ${reportFile}`);
+}
+```
+
+#### scripts/build.ts - Build Script
+```typescript
+#!/usr/bin/env bun
+import { log, ensureDir, formatBytes, formatDuration } from '../deploy/utils';
+
+export interface BuildOptions {
+  minify?: boolean;
+  sourcemap?: boolean;
+  target?: string;
+  outdir?: string;
+  watch?: boolean;
+}
+
+export class ProjectBuilder {
+  private options: Required<BuildOptions>;
+
+  constructor(options: BuildOptions = {}) {
+    this.options = {
+      minify: options.minify ?? true,
+      sourcemap: options.sourcemap ?? false,
+      target: options.target ?? 'browser',
+      outdir: options.outdir ?? 'dist',
+      watch: options.watch ?? false
+    };
+  }
+
+  async build(): Promise<{
+    success: boolean;
+    outputPath: string;
+    size: number;
+    duration: number;
+  }> {
+    const startTime = Date.now();
+    
+    log.step('Building worker with Bun...');
+    
+    // Ensure output directory exists
+    ensureDir(this.options.outdir);
+    
+    try {
+      const buildResult = await Bun.build({
+        entrypoints: ['src/index.ts'],
+        outdir: this.options.outdir,
+        target: this.options.target as any,
+        minify: this.options.minify,
+        sourcemap: this.options.sourcemap ? 'external' : 'none',
+        define: {
+          'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'production')
+        }
+      });
+
+      if (!buildResult.success) {
+        log.error('Build failed:');
+        buildResult.logs.forEach(logEntry => {
+          console.error(logEntry);
+        });
+        return {
+          success: false,
+          outputPath: '',
+          size: 0,
+          duration: Date.now() - startTime
+        };
+      }
+
+      const outputPath = `${this.options.outdir}/index.js`;
+      const file = Bun.file(outputPath);
+      const size = file.size;
+      const duration = Date.now() - startTime;
+
+      log.success(`Worker built successfully in ${formatDuration(duration)}`);
+      log.info(`Output: ${outputPath} (${formatBytes(size)})`);
+
+      return {
+        success: true,
+        outputPath,
+        size,
+        duration
+      };
+
+    } catch (error) {
+      log.error(`Build error: ${error}`);
+      return {
+        success: false,
+        outputPath: '',
+        size: 0,
+        duration: Date.now() - startTime
+      };
+    }
+  }
+
+  async watch(): Promise<void> {
+    log.info('Starting watch mode...');
+    
+    // TODO: Implement file watching
+    // For now, we'll use Bun's built-in watch mode
+    const proc = Bun.spawn(['bun', 'run', '--watch', 'src/index.ts'], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    log.info('Watching for file changes...');
+    await proc.exited;
+  }
+}
+
+// Main execution
+async function main() {
+  const args = process.argv.slice(2);
+  const watch = args.includes('--watch');
+  const minify = !args.includes('--no-minify');
+  const sourcemap = args.includes('--sourcemap');
+  
+  const builder = new ProjectBuilder({
+    minify,
+    sourcemap,
+    watch
+  });
+
+  if (watch) {
+    await builder.watch();
+  } else {
+    const result = await builder.build();
+    process.exit(result.success ? 0 : 1);
+  }
+}
+
+// Run if called directly
+if (import.meta.main) {
+  main().catch(console.error);
+}
+
+export { ProjectBuilder };
+```
+
+#### scripts/clean.ts - Cleanup Script
+```typescript
+#!/usr/bin/env bun
+import { rmSync, existsSync } from 'fs';
+import { log } from '../deploy/utils';
+import { CloudflareAPI } from '../deploy/cloudflare-api';
+import { getConfig } from '../deploy/config';
+
+export class ProjectCleaner {
+  private api?: CloudflareAPI;
+
+  constructor(apiToken?: string, accountId?: string) {
+    if (apiToken && accountId) {
+      this.api = new CloudflareAPI(apiToken, accountId);
+    }
+  }
+
+  async cleanLocal(): Promise<void> {
+    log.step('Cleaning local build artifacts...');
+    
+    const pathsToClean = [
+      'dist',
+      'deploy/reports',
+      'node_modules/.cache'
+    ];
+    
+    for (const path of pathsToClean) {
+      if (existsSync(path)) {
+        rmSync(path, { recursive: true, force: true });
+        log.success(`Removed: ${path}`);
+      }
+    }
+  }
+
+  async cleanRemote(environment: string): Promise<void> {
+    if (!this.api) {
+      log.warning('No API credentials provided, skipping remote cleanup');
+      return;
+    }
+
+    log.step(`Cleaning remote resources for ${environment}...`);
+    
+    const config = getConfig(environment);
+    
+    try {
+      // Remove routes
+      for (const route of config.routes) {
+        const routes = await this.api.listRoutes(route.zone);
+        const matching = routes.filter(r => 
+          r.pattern === route.pattern && r.script === config.scriptName
+        );
+        
+        for (const matchRoute of matching) {
+          await this.api.deleteRoute(route.zone, matchRoute.id);
+          log.success(`Route removed: ${route.pattern}`);
+        }
+      }
+      
+      // Remove Durable Object namespaces
+      const namespaces = await this.api.listDurableObjectNamespaces();
+      for (const obj of config.durableObjects) {
+        const existing = namespaces.find(ns => ns.name === obj.name);
+        if (existing) {
+          await this.api.deleteDurableObjectNamespace(existing.id);
+          log.success(`Durable Object namespace removed: ${obj.name}`);
+        }
+      }
+      
+      // Remove worker
+      try {
+        await this.api.deleteWorkerScript(config.scriptName);
+        log.success(`Worker script removed: ${config.scriptName}`);
+      } catch (error) {
+        log.warning(`Worker script may not exist: ${config.scriptName}`);
+      }
+      
+    } catch (error) {
+      log.error(`Remote cleanup failed: ${error}`);
+      throw error;
+    }
+  }
+}
+
+// Main execution
+async function main() {
+  const args = process.argv.slice(2);
+  const environment = args.find(arg => arg.startsWith('--env='))?.split('=')[1] || 'staging';
+  const localOnly = args.includes('--local-only');
+  const remoteOnly = args.includes('--remote-only');
+  
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  
+  const cleaner = new ProjectCleaner(apiToken, accountId);
+  
+  try {
+    if (!remoteOnly) {
+      await cleaner.cleanLocal();
+    }
+    
+    if (!localOnly && apiToken && accountId) {
+      await cleaner.cleanRemote(environment);
+    }
+    
+    log.success('Cleanup completed successfully!');
+  } catch (error) {
+    log.error(`Cleanup failed: ${error}`);
+    process.exit(1);
+  }
+}
+
+// Run if called directly
+if (import.meta.main) {
+  main().catch(console.error);
+}
+
+export { ProjectCleaner };
+```
+
+#### scripts/test-deployment.ts - Deployment Testing
+```typescript
+#!/usr/bin/env bun
+import { log, sleep, retry } from '../deploy/utils';
+
+export interface HealthCheckResult {
+  endpoint: string;
+  status: number;
+  responseTime: number;
+  success: boolean;
+  error?: string;
+}
+
+export class DeploymentTester {
+  private baseUrls: string[];
+
+  constructor(baseUrls: string[]) {
+    this.baseUrls = baseUrls;
+  }
+
+  async testEndpoints(): Promise<HealthCheckResult[]> {
+    log.step('Testing deployed endpoints...');
+    
+    const results: HealthCheckResult[] = [];
+    
+    for (const baseUrl of this.baseUrls) {
+      const endpoints = [
+        `${baseUrl}/health`,
+        `${baseUrl}/bridges`,
+        `${baseUrl}/bridge/global/stats`
+      ];
+      
+      for (const endpoint of endpoints) {
+        const result = await this.testEndpoint(endpoint);
+        results.push(result);
+        
+        if (result.success) {
+          log.success(`✓ ${endpoint} (${result.responseTime}ms)`);
+        } else {
+          log.error(`✗ ${endpoint} - ${result.error}`);
+        }
+      }
+    }
+    
+    return results;
+  }
+
+  private async testEndpoint(url: string): Promise<HealthCheckResult> {
+    const startTime = Date.now();
+    
+    try {
+      const response = await retry(
+        () => fetch(url, { 
+          method: 'GET',
+          headers: {
+            'User-Agent': 'bitchat-bridge-tester/1.0'
+          }
+        }),
+        3,
+        2000
+      );
+      
+      const responseTime = Date.now() - startTime;
+      
+      return {
+        endpoint: url,
+        status: response.status,
+        responseTime,
+        success: response.ok
+      };
+      
+    } catch (error) {
+      return {
+        endpoint: url,
+        status: 0,
+        responseTime: Date.now() - startTime,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  async testWebSocketConnection(wsUrl: string): Promise<boolean> {
+    log.step(`Testing WebSocket connection: ${wsUrl}`);
+    
+    return new Promise((resolve) => {
+      const ws = new WebSocket(wsUrl);
+      let resolved = false;
+      
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          ws.close();
+          log.error('WebSocket connection timeout');
+          resolve(false);
+        }
+      }, 10000);
+      
+      ws.onopen = () => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          log.success('WebSocket connection successful');
+          ws.close();
+          resolve(true);
+        }
+      };
+      
+      ws.onerror = (error) => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          log.error(`WebSocket connection failed: ${error}`);
+          resolve(false);
+        }
+      };
+    });
+  }
+
+  async runFullTest(): Promise<{
+    success: boolean;
+    results: HealthCheckResult[];
+    websocketSuccess: boolean;
+  }> {
+    const results = await this.testEndpoints();
+    const allEndpointsHealthy = results.every(r => r.success);
+    
+    // Test WebSocket connection to first URL
+    let websocketSuccess = false;
+    if (this.baseUrls.length > 0) {
+      const wsUrl = this.baseUrls[0].replace('https://', 'wss://') + '/bridge/global';
+      websocketSuccess = await this.testWebSocketConnection(wsUrl);
+    }
+    
+    const success = allEndpointsHealthy && websocketSuccess;
+    
+    if (success) {
+      log.success('All deployment tests passed!');
+    } else {
+      log.error('Some deployment tests failed');
+    }
+    
+    return {
+      success,
+      results,
+      websocketSuccess
+    };
+  }
+}
+
+// Main execution
+async function main() {
+  const args = process.argv.slice(2);
+  const environment = args.find(arg => arg.startsWith('--env='))?.split('=')[1] || 'staging';
+  
+  const urls = environment === 'production' 
+    ? ['https://bridge.bitchat.app']
+    : ['https://bridge-staging.bitchat.app'];
+  
+  const tester = new DeploymentTester(urls);
+  const result = await tester.runFullTest();
+  
+  process.exit(result.success ? 0 : 1);
+}
+
+// Run if called directly
+if (import.meta.main) {
+  main().catch(console.error);
+}
+
+export { DeploymentTester };
+```
+#### deploy/deploy.ts - Main Deployment Script
+```typescript
+#!/usr/bin/env bun
+import { CloudflareAPI, type WorkerMetadata } from './cloudflare-api';
+import { getConfig, type DeploymentConfig } from './config';
+import { 
+  log, 
+  validateEnvironmentVariables, 
+  parseArguments,
+  ProgressSpinner,
+  retry,
+  formatBytes,
+  formatDuration,
+  writeDeploymentReport
+} from './utils';
+import { ProjectBuilder } from '../scripts/build';
+
+export class BitchatBridgeDeployer {
+  private api: CloudflareAPI;
+  private config: DeploymentConfig;
+  private environment: string;
+  private isDryRun: boolean;
+  private verbose: boolean;
+
+  constructor(environment: string = 'staging', isDryRun: boolean = false, verbose: boolean = false) {
+    this.environment = environment;
+    this.isDryRun = isDryRun;
+    this.verbose = verbose;
+    this.config = getConfig(environment);
+    
+    const { apiToken, accountId } = validateEnvironmentVariables();
+    this.api = new CloudflareAPI(apiToken, accountId);
+  }
+
+  async deploy(): Promise<{
+    success: boolean;
+    scriptName: string;
+    scriptSize: number;
+    duration: number;
+    errors: string[];
+  }> {
+    const startTime = Date.now();
+    const errors: string[] = [];
+    
+    log.info(`🚀 Starting deployment to ${this.environment}${this.isDryRun ? ' (DRY RUN)' : ''}...`);
+    
+    try {
+      // Validate credentials first
+      await this.validateCredentials();
+      
+      // Step 1: Build the worker
+      const buildResult = await this.buildWorker();
+      if (!buildResult.success) {
+        throw new Error('Build failed');
+      }
+      
+      // Step 2: Upload worker script
+      const uploadResult = await this.uploadWorkerScript(buildResult.outputPath);
+      
+      // Step 3: Setup Durable Objects
+      await this.setupDurableObjects();
+      
+      // Step 4: Configure routes
+      await this.configureRoutes();
+      
+      const duration = Date.now() - startTime;
+      
+      // Write deployment report
+      await writeDeploymentReport(this.environment, {
+        success: true,
+        duration,
+        scriptName: this.config.scriptName,
+        scriptSize: buildResult.size,
+        durableObjects: this.config.durableObjects,
+        routes: this.config.routes,
+        errors
+      });
+      
+      log.success(`🎉 Deployment to ${this.environment} completed successfully in ${formatDuration(duration)}!`);
+      log.info(`🌐 Bridge available at: https://${this.config.routes[0]?.pattern.replace('/*', '')}`);
+      
+      return {
+        success: true,
+        scriptName: this.config.scriptName,
+        scriptSize: buildResult.size,
+        duration,
+        errors
+      };
+      
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      errors.push(errorMessage);
+      
+      await writeDeploymentReport(this.environment, {
+        success: false,
+        duration: Date.now() - startTime,
+        scriptName: this.config.scriptName,
+        scriptSize: 0,
+        durableObjects: this.config.durableObjects,
+        routes: this.config.routes,
+        errors
+      });
+      
+      log.error(`❌ Deployment failed: ${errorMessage}`);
+      
+      return {
+        success: false,
+        scriptName: this.config.scriptName,
+        scriptSize: 0,
+        duration: Date.now() - startTime,
+        errors
+      };
+    }
+  }
+
+  private async validateCredentials(): Promise<void> {
+    const spinner = new ProgressSpinner('Validating Cloudflare credentials...');
+    spinner.start();
+    
+    try {
+      const isValid = await this.api.validateCredentials();
+      if (!isValid) {
+        throw new Error('Invalid Cloudflare API credentials');
+      }
+      spinner.stop(`${log.success.name} Credentials validated`);
+    } catch (error) {
+      spinner.stop(`${log.error.name} Credential validation failed`);
+      throw error;
+    }
+  }
+
+  private async buildWorker(): Promise<{
+    success: boolean;
+    outputPath: string;
+    size: number;
+  }> {
+    log.step('Building worker with Bun...');
+    
+    const builder = new ProjectBuilder({
+      minify: true,
+      sourcemap: false
+    });
+    
+    const result = await builder.build();
+    
+    if (!result.success) {
+      throw new Error('Worker build failed');
+    }
+    
+    return result;
+  }
+
+  private async uploadWorkerScript(scriptPath: string): Promise<void> {
+    if (this.isDryRun) {
+      log.info('DRY RUN: Would upload worker script');
+      return;
+    }
+    
+    const spinner = new ProgressSpinner('Uploading worker script...');
+    spinner.start();
+    
+    try {
+      const scriptContent = await Bun.file(scriptPath).text();
+      const scriptSize = new Blob([scriptContent]).size;
+      
+      const metadata: WorkerMetadata = {
+        main_module: 'index.js',
+        compatibility_date: this.config.compatibilityDate,
+        compatibility_flags: this.config.compatibilityFlags,
+        bindings: this.config.durableObjects.map(obj => ({
+          name: obj.name,
+          type: 'durable_object_namespace',
+          class_name: obj.className
+        }))
+      };
+
+      await retry(
+        () => this.api.uploadWorkerScript(this.config.scriptName, scriptContent, metadata),
+        3,
+        2000
+      );
+
+      spinner.stop(`✅ Worker script uploaded (${formatBytes(scriptSize)})`);
+      
+    } catch (error) {
+      spinner.stop('❌ Worker upload failed');
+      throw error;
+    }
+  }
+
+  private async setupDurableObjects(): Promise<void> {
+    if (this.isDryRun) {
+      log.info('DRY RUN: Would setup Durable Objects');
+      return;
+    }
+    
+    log.step('Setting up Durable Objects...');
+    
+    for (const obj of this.config.durableObjects) {
+      const spinner = new ProgressSpinner(`Setting up ${obj.name}...`);
+      spinner.start();
+      
+      try {
+        // Check if namespace already exists
+        const namespaces = await this.api.listDurableObjectNamespaces();
+        const existing = namespaces.find(ns => ns.name === obj.name);
+        
+        if (existing) {
+          if (this.verbose) {
+            log.info(`Updating existing Durable Object namespace: ${obj.name}`);
+          }
+          await this.api.updateDurableObjectNamespace(
+            existing.id,
+            obj.className,
+            this.config.scriptName
+          );
+        } else {
+          if (this.verbose) {
+            log.info(`Creating new Durable Object namespace: ${obj.name}`);
+          }
+          await this.api.createDurableObjectNamespace(
+            obj.name,
+            obj.className,
+            this.config.scriptName
+          );
+        }
+        
+        spinner.stop(`✅ Durable Object ${obj.name} configured`);
+        
+      } catch (error) {
+        spinner.stop(`⚠️ Durable Object ${obj.name} setup had issues`);
+        log.warning(`Failed to setup Durable Object ${obj.name}: ${error}`);
+        // Continue with deployment - might be a permissions issue
+      }
+    }
+  }
+
+  private async configureRoutes(): Promise<void> {
+    if (this.isDryRun) {
+      log.info('DRY RUN: Would configure routes');
+      return;
+    }
+    
+    log.step('Configuring routes...');
+    
+    for (const route of this.config.routes) {
+      const spinner = new ProgressSpinner(`Configuring route ${route.pattern}...`);
+      spinner.start();
+      
+      try {
+        // Clean up existing routes first
+        const existingRoutes = await this.api.listRoutes(route.zone);
+        const conflicting = existingRoutes.filter(r => 
+          r.pattern === route.pattern && r.script !== this.config.scriptName
+        );
+        
+        for (const conflictRoute of conflicting) {
+          if (this.verbose) {
+            log.info(`Removing conflicting route: ${conflictRoute.pattern}`);
+          }
+          await this.api.deleteRoute(route.zone, conflictRoute.id);
+        }
+        
+        // Check if route already exists for our script
+        const existingForScript = existingRoutes.find(r => 
+          r.pattern === route.pattern && r.script === this.config.scriptName
+        );
+        
+        if (existingForScript) {
+          // Route already exists, update it
+          await this.api.updateRoute(route.zone, existingForScript.id, this.config.scriptName);
+        } else {
+          // Create new route
+          await this.api.createRoute(route.zone, route.pattern, this.config.scriptName);
+        }
+        
+        spinner.stop(`✅ Route configured: ${route.pattern}`);
+        
+      } catch (error) {
+        spinner.stop(`⚠️ Route ${route.pattern} configuration failed`);
+        log.warning(`Failed to configure route ${route.pattern}: ${error}`);
+      }
+    }
+  }
+
+  async cleanup(): Promise<void> {
+    if (this.isDryRun) {
+      log.info('DRY RUN: Would cleanup deployment');
+      return;
+    }
+    
+    log.step(`🧹 Cleaning up deployment for ${this.environment}...`);
+    
+    try {
+      // Remove routes
+      for (const route of this.config.routes) {
+        const spinner = new ProgressSpinner(`Removing route ${route.pattern}...`);
+        spinner.start();
+        
+        try {
+          const routes = await this.api.listRoutes(route.zone);
+          const matching = routes.filter(r => 
+            r.pattern === route.pattern && r.script === this.config.scriptName
+          );
+          
+          for (const matchRoute of matching) {
+            await this.api.deleteRoute(route.zone, matchRoute.id);
+          }
+          
+          spinner.stop(`✅ Route removed: ${route.pattern}`);
+        } catch (error) {
+          spinner.stop(`⚠️ Route removal failed: ${route.pattern}`);
+        }
+      }
+      
+      // Remove Durable Object namespaces
+      const namespaces = await this.api.listDurableObjectNamespaces();
+      for (const obj of this.config.durableObjects) {
+        const existing = namespaces.find(ns => ns.name === obj.name);
+        if (existing) {
+          const spinner = new ProgressSpinner(`Removing namespace ${obj.name}...`);
+          spinner.start();
+          
+          try {
+            await this.api.deleteDurableObjectNamespace(existing.id);
+            spinner.stop(`✅ Durable Object namespace removed: ${obj.name}`);
+          } catch (error) {
+            spinner.stop(`⚠️ Namespace removal failed: ${obj.name}`);
+          }
+        }
+      }
+      
+      // Remove worker
+      const spinner = new ProgressSpinner(`Removing worker ${this.config.scriptName}...`);
+      spinner.start();
+      
+      try {
+        await this.api.deleteWorkerScript(this.config.scriptName);
+        spinner.stop(`✅ Worker script removed: ${this.config.scriptName}`);
+      } catch (error) {
+        spinner.stop(`⚠️ Worker script may not exist: ${this.config.scriptName}`);
+      }
+      
+      log.success('🧹 Cleanup completed successfully!');
+      
+    } catch (error) {
+      log.error(`Cleanup failed: ${error}`);
+      throw error;
+    }
+  }
+}
+
+// Main execution
+async function main() {
+  const args = process.argv.slice(2);
+  const { environment, isCleanup, isDryRun, verbose } = parseArguments(args);
+  
+  const deployer = new BitchatBridgeDeployer(environment, isDryRun, verbose);
+  
+  try {
+    if (isCleanup) {
+      await deployer.cleanup();
+    } else {
+      const result = await deployer.deploy();
+      process.exit(result.success ? 0 : 1);
+    }
+  } catch (error) {
+    log.error(`Operation failed: ${error}`);
+    process.exit(1);
+  }
+}
+
+// Run if called directly
+if (import.meta.main) {
+  main().catch(console.error);
+}
+
+export { BitchatBridgeDeployer };
+```
+
+#### Environment Variables Setup
+```bash
+# .env.example - Copy to .env and fill in your values
+CLOUDFLARE_API_TOKEN=your_api_token_here
+CLOUDFLARE_ACCOUNT_ID=your_account_id_here
+CLOUDFLARE_ZONE_ID=your_production_zone_id_here
+CLOUDFLARE_ZONE_ID_STAGING=your_staging_zone_id_here
+```
+
+#### Usage Commands
+```bash
+# Build only
+bun run build
+
+# Build with watch mode
+bun run build --watch
+
+# Deploy to staging
+bun run deploy:staging
+
+# Deploy to production
+bun run deploy:production
+
+# Dry run deployment (preview without changes)
+bun run deploy:staging --dry-run
+
+# Verbose deployment output
+bun run deploy:staging --verbose
+
+# Test deployment
+bun run test-deploy --env=staging
+
+# Cleanup staging deployment
+bun run deploy:staging --cleanup
+
+# Cleanup production deployment  
+bun run deploy:production --cleanup
+
+# Clean local build artifacts
+bun run cleanup --local-only
+
+# Clean remote resources only
+bun run cleanup --remote-only --env=staging
+
+# Full cleanup (local + remote)
+bun run cleanup --env=staging
+```
+
+#### Advanced Deployment Features
+- **Zero Dependencies**: No npm packages, pure Bun + TypeScript
+- **Type Safety**: Full TypeScript throughout deployment pipeline
+- **Error Handling**: Comprehensive error handling with retry logic
+- **Progress Indicators**: Visual feedback during deployment steps
+- **Deployment Reports**: JSON reports saved for each deployment
+- **Dry Run Mode**: Preview changes without applying them
+- **Health Checks**: Automated testing of deployed endpoints
+- **Rollback Support**: Easy cleanup and removal of deployments
+- **Multi-Environment**: Separate staging and production configurations
 
 ## Integration with Existing Code
 
