@@ -178,5 +178,23 @@ bitchat is a decentralized, offline-first secure messaging application that uses
 - Core Bluetooth framework
 - CryptoKit framework
 
+## Development Guidelines
+
+### ⚠️ IMPORTANT: Project File Modifications
+**STRICTLY PROHIBITED**: Adding, modifying, or removing files in the `bitchat.xcodeproj` folder without explicit user approval. This includes:
+- Adding new source files to the project
+- Modifying project settings or configurations
+- Creating new targets or schemes
+- Adding dependencies or frameworks
+- Changing build settings or Info.plist entries
+
+**Required Process**: Before making any changes to the Xcode project structure:
+1. Request explicit permission from the user
+2. Clearly explain what files will be added/modified
+3. Wait for user confirmation before proceeding
+4. Only make changes after receiving explicit approval
+
+This ensures project integrity and prevents unintended modifications to the build system.
+
 ## License
 This project is released into the public domain under the Unlicense.
