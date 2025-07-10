@@ -4,7 +4,7 @@
 > [!WARNING]
 > This software has not received external security review and may contain vulnerabilities and may not necessarily meet its stated security goals. Do not use it for sensitive use cases, and do not rely on its security until it has been reviewed. Work in progress.
 
-A secure, decentralized, peer-to-peer messaging app that works over Bluetooth mesh networks with optional WiFi bridge support. Connect locally via Bluetooth or globally via internet relay servers - all with end-to-end encryption and no accounts required.
+A secure, decentralized, peer-to-peer messaging app that works over Bluetooth mesh networks. No internet required, no servers, no phone numbers - just pure encrypted communication.
 
 ## License
 
@@ -12,8 +12,7 @@ This project is released into the public domain. See the [LICENSE](LICENSE) file
 
 ## Features
 
-- **Hybrid Transport**: Bluetooth LE mesh + optional WiFi bridge for global connectivity
-- **Zero-Knowledge Relay**: Internet bridges cannot decrypt messages - privacy preserved
+- **Decentralized Mesh Network**: Automatic peer discovery and multi-hop message relay over Bluetooth LE
 - **End-to-End Encryption**: X25519 key exchange + AES-256-GCM for private messages
 - **Channel-Based Chats**: Topic-based group messaging with optional password protection
 - **Store & Forward**: Messages cached for offline peers and delivered when they reconnect
@@ -77,16 +76,14 @@ This project is released into the public domain. See the [LICENSE](LICENSE) file
 - `/pass [password]` - Set/change channel password (owner only)
 - `/transfer @name` - Transfer channel ownership
 - `/save` - Toggle message retention for channel (owner only)
-- `/bridge <on|off|status>` - Control WiFi bridge connectivity
 
 ### Getting Started
 
 1. Launch bitchat on your device
 2. Set your nickname (or use the auto-generated one)
-3. You'll automatically connect to nearby peers via Bluetooth
-4. Optionally enable WiFi bridge with `/bridge on` for global connectivity
-5. Join a channel with `/j #general` or start chatting in public
-6. Messages relay through the mesh network and bridge servers to reach distant peers
+3. You'll automatically connect to nearby peers
+4. Join a channel with `/j #general` or start chatting in public
+5. Messages relay through the mesh network to reach distant peers
 
 ### Channel Features
 
@@ -94,18 +91,6 @@ This project is released into the public domain. See the [LICENSE](LICENSE) file
 - **Message Retention**: Owners can enable mandatory message saving with `/save`
 - **@ Mentions**: Use `@nickname` to mention users (with autocomplete)
 - **Ownership Transfer**: Pass control to trusted users with `/transfer`
-
-### WiFi Bridge Features
-
-- **Global Connectivity**: Connect mesh islands across the internet
-- **Zero-Knowledge Relay**: Bridge servers cannot decrypt your messages
-- **Automatic Failover**: Seamlessly switches between Bluetooth and WiFi
-- **Bridge Commands**:
-  - `/bridge on` - Enable WiFi bridge connectivity
-  - `/bridge off` - Disable bridge (Bluetooth-only mode)
-  - `/bridge status` - Show connection status and transport info
-- **Smart Transport Selection**: Automatically uses the best available connection
-- **Privacy Preserved**: End-to-end encryption maintained through bridge servers
 
 ## Security & Privacy
 
@@ -120,7 +105,7 @@ This project is released into the public domain. See the [LICENSE](LICENSE) file
 - **Ephemeral by Default**: Messages exist only in device memory
 - **Cover Traffic**: Random delays and dummy messages prevent traffic analysis
 - **Emergency Wipe**: Triple-tap logo to instantly clear all data
-- **Local-First**: Works completely offline, optional bridge servers for global reach
+- **Local-First**: Works completely offline, no servers involved
 
 ## Performance & Efficiency
 
@@ -152,63 +137,23 @@ bitchat uses an efficient binary protocol optimized for Bluetooth LE:
 - Automatic fragmentation for large messages
 - Message deduplication via unique IDs
 
-### Hybrid Transport System
-- **Bluetooth LE Mesh**: Local peer-to-peer networking (100m range, extendable via relay)
-- **WiFi Bridge**: Optional internet relay servers for global connectivity
-- **Intelligent Switching**: Automatically selects optimal transport based on conditions
-- **Zero-Knowledge Relay**: Bridge servers cannot decrypt messages - end-to-end encryption maintained
-
 ### Mesh Networking
 - Each device acts as both client and peripheral
 - Automatic peer discovery and connection management
 - Store-and-forward for offline message delivery
 - Adaptive duty cycling for battery optimization
 
-### WiFi Bridge Infrastructure
-- **Cloudflare Workers**: Serverless WebSocket relay infrastructure
-- **Global Edge Network**: Low-latency connections worldwide
-- **Auto-Discovery**: Automatic selection of optimal bridge endpoints
-- **Privacy-Preserving**: Bridges relay encrypted packets without access to content
-
 For detailed protocol documentation, see the [Technical Whitepaper](WHITEPAPER.md).
 
 ## Building for Production
 
-### iOS/macOS App
 1. Set your development team in project settings
 2. Configure code signing
 3. Archive and distribute through App Store or TestFlight
 
-### Bridge Server (Optional)
-If you want to run your own bridge infrastructure:
-
-1. Install dependencies:
-   ```bash
-   cd bridge-server
-   bun install
-   ```
-
-2. Configure environment:
-   ```bash
-   cp .env.example .env
-   # Add your Cloudflare API credentials
-   ```
-
-3. Deploy to Cloudflare Workers:
-   ```bash
-   bun run deploy:staging
-   # or for production:
-   bun run deploy:production
-   ```
-
-4. Update iOS app endpoints in `WiFiBridgeService.swift` with your bridge URLs
-
 ## Android Compatibility
 
 The protocol is designed to be platform-agnostic. An Android client can be built using:
-- **Bluetooth LE APIs**: For local mesh networking
-- **WebSocket APIs**: For WiFi bridge connectivity
-- **Same packet structure and encryption**: Full protocol compatibility
-- **Compatible service/characteristic UUIDs**: Seamless interoperability
-
-Android devices can connect to the same bridge servers and communicate with iOS/macOS clients seamlessly.
+- Bluetooth LE APIs
+- Same packet structure and encryption
+- Compatible service/characteristic UUIDs

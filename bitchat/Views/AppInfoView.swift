@@ -117,7 +117,6 @@ struct AppInfoView: View {
                             Text("/clear - clear current chat")
                             Text("/hug @name - send someone a hug")
                             Text("/slap @name - slap with a trout")
-                            Text("/bridge <on|off|status> - control WiFi bridge")
                         }
                         .font(.system(size: 14, design: .monospaced))
                         .foregroundColor(textColor)
@@ -244,7 +243,6 @@ struct AppInfoView: View {
                             Text("/clear - clear current chat")
                             Text("/hug @name - send someone a hug")
                             Text("/slap @name - slap with a trout")
-                            Text("/bridge <on|off|status> - control WiFi bridge")
                         }
                         .font(.system(size: 14, design: .monospaced))
                         .foregroundColor(textColor)

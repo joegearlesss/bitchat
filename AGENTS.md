@@ -27,9 +27,6 @@ bitchat is a decentralized, offline-first secure messaging application that uses
 - **Delivery/Read Receipts**: Track message delivery status
 - **Share Extension**: Share URLs and text from other apps
 - **Haptic Feedback**: Context-aware vibrations (iOS)
-- **WiFi Bridge**: Internet relay servers for global mesh connectivity
-- **Hybrid Transport**: Intelligent switching between BLE and WiFi bridges
-- **Bridge Discovery**: Automatic selection of optimal relay servers
 
 ## Technical Architecture
 
@@ -136,9 +133,6 @@ bitchat is a decentralized, offline-first secure messaging application that uses
 - `BluetoothMeshService.swift` - BLE mesh networking implementation
 - `EncryptionService.swift` - Cryptographic operations
 - `MessageRetryService.swift` - Automatic message retry logic
-- `WiFiBridgeService.swift` - Internet bridge connectivity
-- `BridgeDiscoveryService.swift` - Bridge endpoint discovery
-- `HybridTransportManager.swift` - Multi-transport coordination
 
 ### Storage & Utilities
 - `MessageRetentionService.swift` - Encrypted local message storage
@@ -147,13 +141,6 @@ bitchat is a decentralized, offline-first secure messaging application that uses
 
 ### Extensions
 - `ShareViewController.swift` - iOS share extension for URL/text sharing
-
-### Bridge Infrastructure
-- `bridge-server/` - Cloudflare Durable Object bridge server
-- `bridge-server/src/index.ts` - Main worker entry point
-- `bridge-server/src/bridge-relay.ts` - WebSocket relay implementation
-- `bridge-server/deploy/` - Zero-dependency deployment scripts
-- `bridge-server/scripts/` - Build and testing utilities
 
 ## Development Status
 
@@ -169,10 +156,6 @@ bitchat is a decentralized, offline-first secure messaging application that uses
 ✅ Panic mode for data clearing
 ✅ Battery optimization
 ✅ Haptic feedback
-✅ **WiFi Bridge Support** - Internet relay for extended range
-✅ **Hybrid Transport** - Seamless BLE + WiFi coordination
-✅ **Bridge Discovery** - Automatic optimal bridge selection
-✅ **Zero-Knowledge Bridges** - Privacy-preserving relay servers
 
 ### Architecture Strengths
 - **Modular Design**: Clear separation of concerns
