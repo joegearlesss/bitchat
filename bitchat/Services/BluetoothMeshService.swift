@@ -1337,6 +1337,9 @@ class BluetoothMeshService: NSObject {
             }
         }
         
+        // Send to bridge if available
+        sendToBridge(packet)
+        
         // If no peers received the message, add to retry queue ONLY if it's our own message
         if sentToPeripherals == 0 && sentToCentrals == 0 {
             // Check if this packet originated from us
@@ -2891,5 +2894,61 @@ extension BluetoothMeshService: CBPeripheralManagerDelegate {
     
     private func updatePeerLastSeen(_ peerID: String) {
         peerLastSeenTimestamps[peerID] = Date()
+    }
+    
+    // MARK: - Bridge Support
+    
+    func injectBridgeMessage(_ packet: BitchatPacket) {
+        // Validate message isn't from local network
+        let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8) ?? "unknown"
+        guard senderID != myPeerID else { return }
+        
+        // Check if we've already processed this message
+        let messageID = "\(packet.timestamp)-\(senderID)-\(packet.payload.prefix(64).hashValue)"
+        guard !processedMessages.contains(messageID) else { return }
+        
+        // Add to processed messages
+        processedMessages.insert(messageID)
+        messageBloomFilter.insert(messageID)
+        
+        // Process message as if received from BLE
+        DispatchQueue.main.async {
+            self.handleReceivedPacket(packet, from: "bridge")
+        }
+        
+        // Relay to local mesh if TTL allows
+        if packet.ttl > 0 {
+            var relayPacket = packet
+            relayPacket.ttl -= 1
+            relayToConnectedPeers(relayPacket)
+        }
+    }
+    
+    func sendToBridge(_ packet: BitchatPacket) {
+        // Only send to bridge if message originated locally or has sufficient TTL
+        let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8) ?? "unknown"
+        guard senderID == myPeerID || packet.ttl > 1 else { return }
+        
+        // Notify bridge manager to relay message
+        NotificationCenter.default.post(
+            name: .bridgeMessageRelay,
+            object: packet
+        )
+    }
+    
+    private func relayToConnectedPeers(_ packet: BitchatPacket) {
+        guard let data = packet.toBinaryData() else { return }
+        
+        // Send to all connected peripherals
+        for peripheral in connectedPeripherals.values {
+            if let characteristic = peripheralCharacteristics[peripheral] {
+                peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
+            }
+        }
+        
+        // Send to all subscribed centrals
+        if let char = characteristic {
+            peripheralManager?.updateValue(data, for: char, onSubscribedCentrals: nil)
+        }
     }
 }

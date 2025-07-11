@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var showCommandSuggestions = false
     @State private var commandSuggestions: [String] = []
     @State private var showLeaveChannelAlert = false
+    @State private var showBridgeSettings = false
     
     private var backgroundColor: Color {
         colorScheme == .dark ? Color.black : Color.white
@@ -119,6 +120,11 @@ struct ContentView: View {
         #endif
         .sheet(isPresented: $showAppInfo) {
             AppInfoView()
+        }
+        .sheet(isPresented: $showBridgeSettings) {
+            if let bridgeManager = viewModel.bridgeManager {
+                BridgeSettingsView(bridgeManager: bridgeManager)
+            }
         }
         .alert("Set Channel Password", isPresented: $showPasswordInput) {
             SecureField("Password", text: $passwordInput)
@@ -1036,6 +1042,59 @@ struct ContentView: View {
                         }
                         }
                     }
+                }
+                .padding(.vertical, 8)
+            }
+            
+            // Bridge Settings Section
+            if let bridgeManager = viewModel.bridgeManager {
+                Divider()
+                    .padding(.vertical, 4)
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "network")
+                            .font(.system(size: 10))
+                        Text("BRIDGE")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    }
+                    .foregroundColor(secondaryTextColor)
+                    .padding(.horizontal, 12)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Status:")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(secondaryTextColor)
+                            Text(bridgeManager.isEnabled ? "Enabled" : "Disabled")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(bridgeManager.isEnabled ? textColor : secondaryTextColor)
+                        }
+                        
+                        if bridgeManager.isEnabled {
+                            let connectedCount = bridgeManager.activeBridges.filter(\.isConnected).count
+                            let totalCount = bridgeManager.activeBridges.count
+                            
+                            HStack {
+                                Text("Bridges:")
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundColor(secondaryTextColor)
+                                Text("\(connectedCount)/\(totalCount)")
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundColor(connectedCount > 0 ? textColor : secondaryTextColor)
+                            }
+                        }
+                        
+                        Button(action: {
+                            showBridgeSettings = true
+                        }) {
+                            Text("Settings")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(textColor)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 12)
                 }
                 .padding(.vertical, 8)
             }

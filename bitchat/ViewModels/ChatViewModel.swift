@@ -52,6 +52,7 @@ class ChatViewModel: ObservableObject {
     @Published var retentionEnabledChannels: Set<String> = []  // Channels where owner enabled retention for all members
     
     let meshService = BluetoothMeshService()
+    var bridgeManager: BridgeManager?
     private let userDefaults = UserDefaults.standard
     private let nicknameKey = "bitchat.nickname"
     private let favoritesKey = "bitchat.favorites"
@@ -82,6 +83,11 @@ class ChatViewModel: ObservableObject {
         // Load saved channels state
         savedChannels = MessageRetentionService.shared.getFavoriteChannels()
         meshService.delegate = self
+        
+        // Initialize bridge manager
+        let encryptionService = EncryptionService()
+        bridgeManager = BridgeManager(encryptionService: encryptionService)
+        bridgeManager?.meshService = meshService
         
         // Log startup info
         
@@ -2457,6 +2463,14 @@ extension ChatViewModel: BitchatDelegate {
             }
             
         default:
+            // Check for bridge commands
+            let cmdStr = String(cmd)
+            if cmdStr.hasPrefix("bridge-") {
+                let arguments = Array(parts.dropFirst()).map(String.init)
+                handleBridgeCommand(cmdStr, arguments: arguments)
+                return
+            }
+            
             // Unknown command
             let systemMessage = BitchatMessage(
                 sender: "system",
