@@ -105,8 +105,6 @@
 		1EB3A8FE16333ED12FCB8ACB /* BloomFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BloomFilterTests.swift; sourceTree = "<group>"; };
 		229F17B68CFF7AB1BC91C847 /* BitchatProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BitchatProtocol.swift; sourceTree = "<group>"; };
 		296603E02E1F11DB0012636D /* AGENTS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = AGENTS.md; sourceTree = "<group>"; };
-		296603E12E1F138D0012636D /* WIFI_BRIDGE_IMPLEMENTATION_PLAN.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = WIFI_BRIDGE_IMPLEMENTATION_PLAN.md; sourceTree = "<group>"; };
-		296603E22E1F14930012636D /* todo.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = todo.md; sourceTree = "<group>"; };
 		32F149C43D1915831B60FE09 /* CompressionUtil.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompressionUtil.swift; sourceTree = "<group>"; };
 		3448F84BF86A42A3CC4A9379 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		3668EEBB42FD4A24D5D83B7B /* bitchatShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = bitchatShareExtension.entitlements; sourceTree = "<group>"; };
@@ -147,8 +145,6 @@
 				C3D98EB3E1B455E321F519F4 /* bitchatTests */,
 				9F37F9F2C353B58AC809E93B /* Products */,
 				296603E02E1F11DB0012636D /* AGENTS.md */,
-				296603E12E1F138D0012636D /* WIFI_BRIDGE_IMPLEMENTATION_PLAN.md */,
-				296603E22E1F14930012636D /* todo.md */,
 			);
 			sourceTree = "<group>";
 		};
