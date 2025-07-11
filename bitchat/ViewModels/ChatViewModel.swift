@@ -2465,9 +2465,11 @@ extension ChatViewModel: BitchatDelegate {
         default:
             // Check for bridge commands
             let cmdStr = String(cmd)
-            if cmdStr.hasPrefix("bridge-") {
+            if cmdStr.hasPrefix("/bridge-") {
+                // Remove the "/" prefix for the bridge command handler
+                let bridgeCommand = String(cmdStr.dropFirst())
                 let arguments = Array(parts.dropFirst()).map(String.init)
-                handleBridgeCommand(cmdStr, arguments: arguments)
+                handleBridgeCommand(bridgeCommand, arguments: arguments)
                 return
             }
             

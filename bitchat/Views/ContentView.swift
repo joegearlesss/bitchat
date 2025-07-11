@@ -555,6 +555,12 @@ struct ContentView: View {
                     // Define commands with aliases and syntax
                     let commandInfo: [(commands: [String], syntax: String?, description: String)] = [
                         (["/block"], "[nickname]", "block or list blocked peers"),
+                        (["/bridge-connect"], "<url>", "connect to a bridge server"),
+                        (["/bridge-disconnect"], "[url]", "disconnect from a bridge server"),
+                        (["/bridge-enable"], nil, "enable bridge functionality"),
+                        (["/bridge-disable"], nil, "disable bridge functionality"),
+                        (["/bridge-list"], nil, "list all bridge connections"),
+                        (["/bridge-status"], nil, "show bridge connection status"),
                         (["/clear"], nil, "clear chat messages"),
                         (["/hug"], "<nickname>", "send someone a warm hug"),
                         (["/j", "/join"], "<channel>", "join or create a channel"),
@@ -664,6 +670,12 @@ struct ContentView: View {
                         // Build context-aware command list
                         var commandDescriptions = [
                             ("/block", "block or list blocked peers"),
+                            ("/bridge-connect", "connect to a bridge server"),
+                            ("/bridge-disconnect", "disconnect from a bridge server"),
+                            ("/bridge-enable", "enable bridge functionality"),
+                            ("/bridge-disable", "disable bridge functionality"),
+                            ("/bridge-list", "list all bridge connections"),
+                            ("/bridge-status", "show bridge connection status"),
                             ("/channels", "show all discovered channels"),
                             ("/clear", "clear chat messages"),
                             ("/hug", "send someone a warm hug"),
